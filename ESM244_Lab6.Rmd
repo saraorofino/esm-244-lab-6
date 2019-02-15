@@ -1,0 +1,293 @@
+---
+title: "ESM 244 Lab 6"
+author: "Sara Orofino"
+date: "2/13/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Goals:
+
+- Read in spatial data  
+- Simplify polygons   
+- Add and transform projections (st_transform, st_crs)  
+- Create a bunch of maps  
+- Join spatial data 
+- Find intersections of spatial data 
+- Interactive plots   
+- Create sf from lat/long coordinates    
+
+Load packages: 
+```{r}
+
+library(tidyverse)
+library(sf)
+library(tmap)
+library(leaflet)
+library(ggrepel)
+library(ggspatial)
+library(RColorBrewer)
+library(raster)
+library(plotly)
+
+
+```
+
+
+###Example 1. Dams in California   
+
+Notes for Code chunk:  
+- Use layer = "" and specify the beginning of the file path  (whatever is before the .prj, .shp etc.)  
+- Specify dplyr and use the select function to reduce the number of attributes to just the ecoregion name attribute and associated spatail information.   
+- Use st_simplify() to make files sizes easier to work with (if the ecoregion is within 100 meters of a line it will collapse together onto one line)  
+- Transform coordinate reference system (can check current crs using st_crs(ca_eco))  
+
+
+```{r}
+
+ca_eco <- read_sf(".", layer = "ca_eco") %>% 
+  dplyr::select(US_L3NAME) %>% 
+  rename(Region = US_L3NAME) %>% 
+  st_simplify(dTolerance = 100) %>% 
+  st_transform(crs = 4326)
+
+```
+
+```{r}
+
+ca_counties <- read_sf(".", layer = "california_county_shape_file") #No existing crs 
+
+# Set crs for ca_counties to WGS84:
+
+st_crs(ca_counties) = 4326   
+
+
+```
+
+```{r}
+
+ca_dams <- read_sf(".", layer =  "California_Jurisdictional_Dams") %>% 
+  rename(Condition = Condition_) 
+
+# Factor Relevel - used to override the default setting of alphabetical ordering 
+
+ca_dams$Condition <- fct_relevel(ca_dams$Condition, "Fair", "Satisfactory", "Unsatisfactory", "Poor")
+
+```
+
+
+##MAPS!!! 
+
+
+```{r}
+
+plot(ca_eco)
+plot(ca_counties)
+
+```
+
+
+Make a map  with ggplot!  
+
+```{r}
+
+# RColor Brewer to specify color palette for the 13 ecoregions 
+# Vector for number of regions we need
+
+color_count <- 13
+
+# brewer.pal(number of colors in existing ramp, "rampname")(vector for colors)
+my_colors  <- colorRampPalette(brewer.pal(10, "Set2"))(color_count)
+
+#Graph code - color = "NA" removes the outline for counties; change color scheme with scale_fill_manual(); add layers using geom_sf() but specify where data comes from! 
+# coord_sf(datum = NA) gets rid of lat/long degrees 
+
+ggplot(ca_eco)  +
+  geom_sf(aes(fill= Region), 
+          color = "NA",
+          show.legend = FALSE) +
+  scale_fill_manual(values =  my_colors) +
+  geom_sf(data = ca_counties,
+          fill = "NA",
+          color  = "grey30",  
+          size =  0.1) +
+  geom_point(data = ca_dams, aes(x = Longitude, y = Latitude),
+             size = 1, color = "grey10", alpha = 0.5)  +
+  theme_minimal() +
+  coord_sf(datum  = NA) 
+
+```
+
+###Example 2. Dams in the Sierra Nevada Ecoregion  
+
+
+```{r}
+# Join information in the ecoregions dataframe for Sierra Nevada with information in the dam dataframe
+
+sn <- ca_eco %>% 
+  filter(Region == "Sierra Nevada") %>% 
+  st_join(ca_dams) 
+
+ggplot(sn) +
+  geom_sf(data = ca_counties, fill = "wheat3", color = "NA") +
+  geom_sf(fill = "lemonchiffon4", color = "NA") +
+  geom_point(aes(x = Longitude, y = Latitude), size = 0.5, color = "red4")
+
+```
+
+
+###Example 3. Ecoregions for Santa Barbara County   
+
+
+```{r}
+
+sb <- ca_counties %>% 
+  filter(NAME == "Santa Barbara")
+
+eco_clip <- st_intersection(ca_eco, sb)
+
+ggplot(eco_clip) +
+  geom_sf(data = ca_counties, fill = "grey90", color = "grey80",
+          size = 0.2) +
+  geom_sf(aes(fill = Region, line = "NA")) +
+  scale_fill_manual(values = c("darkolivegreen2", "darkolivegreen", "gold2")) +
+  coord_sf(xlim = c(-121, -119), ylim = c(33.5,35.5)) +
+  geom_point(aes(x = -119.6982, y = 34.4208), size = 2) +
+  geom_text(x = -119.6982, y = 34.35, label = "Santa Barbara") +
+  theme_minimal() +
+  theme(legend.position = c(0.5,0.15)) + 
+  labs(x = "", y = "", title = "Santa Barbara County Ecoregions")
+  
+```
+
+
+###Example 4. Intro to interactive plots with tmap 
+
+```{r}
+
+map_sb_eco <- tm_shape(eco_clip) +
+  tm_fill("Region", palette = "RdPu", alpha = 0.5) +
+  tm_shape(ca_counties) +
+  tm_borders()
+
+#sets tmap to interactive viewing: 
+
+tmap_mode("view")
+map_sb_eco
+
+# Can use leaflet::providers() to view what basemaps are available 
+# Setting the basemap will take away the options for different ones in the interactive viewing 
+
+# Example with different basemap 
+
+tm_basemap("CartoDB.DarkMatter") + 
+  tm_shape(eco_clip) +
+  tm_borders(col = "white")
+```
+
+###Example 5. Fault Lines
+
+```{r}
+# Separate takes information from the LTYPE column and separates the varaibles in the that column into different columns, tell it the variables are separted with commas by using sep = ","  
+
+
+fault_lines <- read_sf(".", layer = "GMC_str_arc") %>% 
+  st_transform(crs = 4326) %>% 
+  separate(LTYPE, into = c("syn_ant", "certainty", "direction", sep = ","))
+
+ggplot() +
+  geom_sf(data = ca_counties, fill = "black", color = "NA") +
+  geom_sf(data = fault_lines, aes(color = syn_ant)) +
+  theme_dark()
+
+
+# Fault lines in SB county only:
+
+sb_faults <- fault_lines %>% 
+  st_intersection(sb)
+
+ggplot() +
+  geom_sf(data = sb) +
+  geom_sf(data = sb_faults, aes(color = syn_ant))
+
+tm_basemap("CartoDB.DarkMatter") + 
+  tm_shape(sb) +
+  tm_borders(col = "grey50", lwd = 2) + 
+  tm_shape(sb_faults) +
+  tm_lines(col = "syn_ant", palette = c("orange", "purple"), lwd = 2)
+```
+
+
+
+###Example 6. Faceted Maps   
+
+Frequently faceted by year, but here we'll use types of fault lines  
+
+```{r}
+
+ggplot() +
+  geom_sf(data  = ca_counties, fill = "black", color= "NA") +
+  geom_sf(data = fault_lines, aes(color = syn_ant)) +
+  facet_wrap(~syn_ant)
+
+# can use tm_facets to facet wrap in tmaps
+```
+
+
+###Example 7. Making Spatial Points  
+
+```{r}
+
+ca_sites <- read_csv("cadfw_sensitive_sites.csv")
+
+#Specify which columns the lat/long are in using coords() - notice the geometry column added to the end
+# Have to specify long then lat
+
+
+sites_sf <- st_as_sf(ca_sites, coords = c("LONDD", "LATDD"),
+                     crs = 4326)
+
+ggplot() + 
+  geom_sf(data = ca_counties, fill = "grey40") +
+  geom_sf(data = sites_sf, aes(color = PRI_CODE), size = 0.3)
+
+```
+
+
+###Example 8. Chloropleth of CA Counties by number of dams in each county 
+
+```{r}
+# Be sure that the spatial information for dams is within CA counties - find intersection 
+
+intersection <- st_intersection(ca_dams, ca_counties)
+
+# Want to count how many dams there are in each county:
+
+dams_per_county <- intersection %>% 
+  group_by(NAME) %>% 
+  tally()
+
+# Then merge to the ca_counties dataframe: 
+
+ca_total <- ca_counties %>% 
+  st_join(dams_per_county) %>% 
+  dplyr::select(NAME.x, n) %>% 
+  rename(name = NAME.x)
+
+# Reassign NA values to zero:
+ca_total$n[is.na(ca_total$n)] <- 0
+
+
+# Graph it 
+
+ggplot() +
+  geom_sf(data =ca_total, aes(fill = n), size = 0.2) +
+  theme_minimal() +
+  scale_fill_continuous(low = "yellow", high = "red")
+
+```
+
+
+
